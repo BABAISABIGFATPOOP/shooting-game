@@ -36,14 +36,56 @@ TARGET_COLORS = [
 HUD_HEIGHT = 60
 PLAY_AREA_TOP = HUD_HEIGHT
 PLAY_AREA = pygame.Rect(0, PLAY_AREA_TOP, WIDTH, HEIGHT - HUD_HEIGHT)
-TARGET_MIN_RADIUS = 18
-TARGET_MAX_RADIUS = 42
-TARGET_SHRINK_SPEED = 30  # pixels per second
-SPAWN_INTERVAL_START = 1.2  # seconds
-SPAWN_INTERVAL_MIN = 0.4
-SPAWN_SPEEDUP = 0.015  # interval reduction per target spawned
-LIVES_START = 5
 COMBO_DECAY_TIME = 1.5  # seconds to maintain combo
+
+# Difficulty presets: (min_radius, max_radius, shrink_speed, spawn_start, spawn_min, spawn_speedup, lives)
+DIFFICULTIES = {
+    "Easy": {
+        "min_radius": 30,
+        "max_radius": 55,
+        "shrink_speed": 18,
+        "spawn_start": 1.8,
+        "spawn_min": 0.7,
+        "spawn_speedup": 0.01,
+        "lives": 7,
+        "color": GREEN,
+        "desc": "Large targets, slow shrink",
+    },
+    "Medium": {
+        "min_radius": 18,
+        "max_radius": 42,
+        "shrink_speed": 30,
+        "spawn_start": 1.2,
+        "spawn_min": 0.4,
+        "spawn_speedup": 0.015,
+        "lives": 5,
+        "color": YELLOW,
+        "desc": "Standard targets and speed",
+    },
+    "Hard": {
+        "min_radius": 10,
+        "max_radius": 28,
+        "shrink_speed": 45,
+        "spawn_start": 0.8,
+        "spawn_min": 0.25,
+        "spawn_speedup": 0.02,
+        "lives": 3,
+        "color": RED,
+        "desc": "Tiny targets, fast shrink",
+    },
+    "Impossible": {
+        "min_radius": 6,
+        "max_radius": 18,
+        "shrink_speed": 60,
+        "spawn_start": 0.5,
+        "spawn_min": 0.15,
+        "spawn_speedup": 0.025,
+        "lives": 1,
+        "color": ORANGE,
+        "desc": "Good luck...",
+    },
+}
+DIFFICULTY_NAMES = list(DIFFICULTIES.keys())
 
 
 # --- Helper ---
@@ -53,9 +95,10 @@ def clamp(val, lo, hi):
 
 # --- Target ---
 class Target:
-    def __init__(self):
-        self.max_radius = random.randint(TARGET_MIN_RADIUS, TARGET_MAX_RADIUS)
+    def __init__(self, diff):
+        self.max_radius = random.randint(diff["min_radius"], diff["max_radius"])
         self.radius = self.max_radius
+        self.shrink_speed = diff["shrink_speed"]
         self.x = random.randint(
             PLAY_AREA.left + self.max_radius,
             PLAY_AREA.right - self.max_radius,
@@ -69,7 +112,7 @@ class Target:
         self.alive = True
 
     def update(self, dt):
-        self.radius -= TARGET_SHRINK_SPEED * dt
+        self.radius -= self.shrink_speed * dt
         if self.radius <= 0:
             self.alive = False
 
@@ -122,6 +165,8 @@ class AimTrainer:
         self.font_sm = pygame.font.Font(FONT_NAME, 20)
         self.font_xs = pygame.font.Font(FONT_NAME, 16)
         self.state = "menu"  # menu, playing, gameover
+        self.selected_difficulty = 1  # default to Medium
+        self.difficulty = DIFFICULTIES[DIFFICULTY_NAMES[self.selected_difficulty]]
         self.crosshair = self._make_crosshair()
         pygame.mouse.set_visible(False)
         self.reset()
@@ -145,12 +190,12 @@ class AimTrainer:
         self.score = 0
         self.hits = 0
         self.shots = 0
-        self.lives = LIVES_START
+        self.lives = self.difficulty["lives"]
         self.combo = 0
         self.best_combo = 0
         self.last_hit_time = 0
         self.spawn_timer = 0
-        self.spawn_interval = SPAWN_INTERVAL_START
+        self.spawn_interval = self.difficulty["spawn_start"]
         self.targets_spawned = 0
         self.start_time = 0
         self.elapsed = 0
@@ -169,6 +214,13 @@ class AimTrainer:
                             self.state = "menu"
                         else:
                             running = False
+                    if self.state == "menu":
+                        if event.key == pygame.K_LEFT or event.key == pygame.K_a:
+                            self.selected_difficulty = (self.selected_difficulty - 1) % len(DIFFICULTY_NAMES)
+                            self.difficulty = DIFFICULTIES[DIFFICULTY_NAMES[self.selected_difficulty]]
+                        elif event.key == pygame.K_RIGHT or event.key == pygame.K_d:
+                            self.selected_difficulty = (self.selected_difficulty + 1) % len(DIFFICULTY_NAMES)
+                            self.difficulty = DIFFICULTIES[DIFFICULTY_NAMES[self.selected_difficulty]]
                     if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
                         if self.state == "menu":
                             self.reset()
@@ -178,9 +230,19 @@ class AimTrainer:
                             self.state = "menu"
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self.state == "menu":
-                        self.reset()
-                        self.state = "playing"
-                        self.start_time = time.time()
+                        # Check if clicking a difficulty button
+                        clicked_diff = False
+                        if hasattr(self, "diff_rects"):
+                            for i, rect in enumerate(self.diff_rects):
+                                if rect.collidepoint(event.pos):
+                                    self.selected_difficulty = i
+                                    self.difficulty = DIFFICULTIES[DIFFICULTY_NAMES[i]]
+                                    clicked_diff = True
+                                    break
+                        if not clicked_diff:
+                            self.reset()
+                            self.state = "playing"
+                            self.start_time = time.time()
                     elif self.state == "playing":
                         self._handle_shot(event.pos)
                     elif self.state == "gameover":
@@ -216,7 +278,7 @@ class AimTrainer:
                 self.best_combo = max(self.best_combo, self.combo)
 
                 # score: smaller target + faster reaction + combo
-                size_bonus = max(1, (TARGET_MAX_RADIUS - t.max_radius) // 4)
+                size_bonus = max(1, (self.difficulty["max_radius"] - t.max_radius) // 4)
                 speed_bonus = max(1, int(10 / max(react, 0.1)))
                 combo_mult = min(self.combo, 10)
                 points = (10 + size_bonus + speed_bonus) * combo_mult
@@ -240,11 +302,11 @@ class AimTrainer:
         # spawn targets
         self.spawn_timer -= dt
         if self.spawn_timer <= 0:
-            self.targets.append(Target())
+            self.targets.append(Target(self.difficulty))
             self.targets_spawned += 1
             self.spawn_interval = max(
-                SPAWN_INTERVAL_MIN,
-                SPAWN_INTERVAL_START - self.targets_spawned * SPAWN_SPEEDUP,
+                self.difficulty["spawn_min"],
+                self.difficulty["spawn_start"] - self.targets_spawned * self.difficulty["spawn_speedup"],
             )
             self.spawn_timer = self.spawn_interval
 
@@ -290,21 +352,68 @@ class AimTrainer:
 
     def _draw_menu(self):
         title = self.font_big.render("AIM TRAINER", True, WHITE)
-        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 160))
+        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 120))
+
+        # Difficulty selector
+        diff_label = self.font_sm.render("Difficulty:", True, LIGHT_GRAY)
+        self.screen.blit(diff_label, (WIDTH // 2 - diff_label.get_width() // 2, 200))
+
+        # Draw difficulty options
+        total_width = 0
+        option_widths = []
+        for name in DIFFICULTY_NAMES:
+            w = self.font_med.size(name)[0] + 40
+            option_widths.append(w)
+            total_width += w + 20
+        total_width -= 20
+        start_x = WIDTH // 2 - total_width // 2
+        x = start_x
+        y = 235
+        self.diff_rects = []
+        for i, name in enumerate(DIFFICULTY_NAMES):
+            diff = DIFFICULTIES[name]
+            w = option_widths[i]
+            rect = pygame.Rect(x, y, w, 40)
+            self.diff_rects.append(rect)
+            selected = i == self.selected_difficulty
+            if selected:
+                pygame.draw.rect(self.screen, diff["color"], rect, border_radius=6)
+                txt = self.font_med.render(name, True, BG_COLOR)
+            else:
+                pygame.draw.rect(self.screen, DARK_GRAY, rect, border_radius=6)
+                pygame.draw.rect(self.screen, diff["color"], rect, 2, border_radius=6)
+                txt = self.font_med.render(name, True, diff["color"])
+            self.screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+            x += w + 20
+
+        # Difficulty description
+        diff = self.difficulty
+        desc = self.font_sm.render(diff["desc"], True, diff["color"])
+        self.screen.blit(desc, (WIDTH // 2 - desc.get_width() // 2, 290))
+
+        details = self.font_xs.render(
+            f"Lives: {diff['lives']}  |  Target size: {diff['min_radius']}-{diff['max_radius']}  |  Shrink speed: {diff['shrink_speed']}",
+            True, LIGHT_GRAY,
+        )
+        self.screen.blit(details, (WIDTH // 2 - details.get_width() // 2, 318))
+
+        # Arrow hints
+        arrows = self.font_sm.render("<  A/D or Arrow Keys to change  >", True, ACCENT)
+        self.screen.blit(arrows, (WIDTH // 2 - arrows.get_width() // 2, 355))
 
         sub = self.font_med.render("Click or press SPACE to start", True, LIGHT_GRAY)
-        self.screen.blit(sub, (WIDTH // 2 - sub.get_width() // 2, 240))
+        self.screen.blit(sub, (WIDTH // 2 - sub.get_width() // 2, 400))
 
         instructions = [
             "Shoot targets before they shrink away",
             "Smaller & faster hits = more points",
             "Build combos for score multipliers",
-            "You have 5 lives - don't let targets expire!",
+            f"You have {diff['lives']} lives - don't let targets expire!",
             "Press ESC to return to menu",
         ]
         for i, line in enumerate(instructions):
             txt = self.font_xs.render(line, True, LIGHT_GRAY)
-            self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 320 + i * 28))
+            self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 450 + i * 28))
 
     def _draw_game(self):
         # play area border
@@ -343,6 +452,11 @@ class AimTrainer:
         for i in range(self.lives):
             pygame.draw.circle(self.screen, RED, (WIDTH - 135 + i * 22, 28), 8)
 
+        # difficulty label
+        diff_name = DIFFICULTY_NAMES[self.selected_difficulty]
+        diff_txt = self.font_xs.render(diff_name, True, self.difficulty["color"])
+        self.screen.blit(diff_txt, (WIDTH // 2 - diff_txt.get_width() // 2, 20))
+
         # timer
         timer_txt = self.font_sm.render(f"{self.elapsed:.1f}s", True, LIGHT_GRAY)
         self.screen.blit(timer_txt, (WIDTH - 60, 18))
@@ -357,6 +471,10 @@ class AimTrainer:
             if self.reaction_times
             else 0
         )
+
+        diff_name = DIFFICULTY_NAMES[self.selected_difficulty]
+        diff_label = self.font_med.render(f"[ {diff_name} ]", True, self.difficulty["color"])
+        self.screen.blit(diff_label, (WIDTH // 2 - diff_label.get_width() // 2, 155))
 
         stats = [
             (f"Final Score: {self.score}", WHITE),
