@@ -3,6 +3,12 @@ import random
 import time
 import math
 import sys
+import os
+import json
+import urllib.request
+import threading
+
+VERSION = "1.1.0"
 
 pygame.init()
 
@@ -165,6 +171,10 @@ class AimTrainer:
         self.font_sm = pygame.font.Font(FONT_NAME, 20)
         self.font_xs = pygame.font.Font(FONT_NAME, 16)
         self.state = "menu"  # menu, playing, gameover
+        self.update_status = ""  # "", "checking", "up_to_date", "available", "downloading", "done", "error"
+        self.update_message = ""
+        self.update_url = ""
+        self.update_thread = None
         self.selected_difficulty = 1  # default to Medium
         self.difficulty = DIFFICULTIES[DIFFICULTY_NAMES[self.selected_difficulty]]
         self.crosshair = self._make_crosshair()
@@ -201,6 +211,86 @@ class AimTrainer:
         self.elapsed = 0
         self.reaction_times = []
 
+    def _check_for_updates(self):
+        """Check GitHub for a newer release (runs in a background thread)."""
+        try:
+            url = "https://api.github.com/repos/BABAISABIGFATPOOP/shooting-game/releases/latest"
+            req = urllib.request.Request(url, headers={"User-Agent": "AimTrainer/" + VERSION})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            tag = data.get("tag_name", "").lstrip("vV")
+            if not tag:
+                self.update_message = "Could not check for updates"
+                self.update_status = "error"
+                return
+            # Simple version comparison (split on '.' and compare ints)
+            def ver_tuple(v):
+                return tuple(int(x) for x in v.split("."))
+            if ver_tuple(tag) > ver_tuple(VERSION):
+                # Find .exe asset
+                asset_url = ""
+                for asset in data.get("assets", []):
+                    if asset["name"].endswith(".exe"):
+                        asset_url = asset["browser_download_url"]
+                        break
+                if asset_url:
+                    self.update_url = asset_url
+                    self.update_message = f"Update available: v{tag}"
+                    self.update_status = "available"
+                else:
+                    self.update_message = f"v{tag} available but no .exe found"
+                    self.update_status = "error"
+            else:
+                self.update_message = "You're up to date!"
+                self.update_status = "up_to_date"
+        except Exception:
+            self.update_message = "Could not check for updates"
+            self.update_status = "error"
+
+    def _download_update(self):
+        """Download the new exe and launch a batch script to replace it."""
+        try:
+            self.update_status = "downloading"
+            self.update_message = "Downloading update..."
+            exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+            exe_dir = os.path.dirname(exe_path)
+            exe_name = os.path.basename(exe_path)
+            new_exe = os.path.join(exe_dir, "AimTrainer_new.exe")
+
+            req = urllib.request.Request(self.update_url, headers={"User-Agent": "AimTrainer/" + VERSION})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                with open(new_exe, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+            # Write a batch script to swap the exe
+            bat_path = os.path.join(exe_dir, "_update.bat")
+            with open(bat_path, "w") as f:
+                f.write("@echo off\n")
+                f.write("timeout /t 2 /nobreak >nul\n")
+                f.write(f'del "{os.path.join(exe_dir, exe_name)}"\n')
+                f.write(f'move "{new_exe}" "{os.path.join(exe_dir, exe_name)}"\n')
+                f.write(f'start "" "{os.path.join(exe_dir, exe_name)}"\n')
+                f.write(f'del "%~f0"\n')
+
+            self.update_message = "Update ready! Restarting..."
+            self.update_status = "done"
+        except Exception:
+            self.update_message = "Download failed"
+            self.update_status = "error"
+
+    def _apply_update(self):
+        """Launch the batch updater and exit."""
+        exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+        exe_dir = os.path.dirname(exe_path)
+        bat_path = os.path.join(exe_dir, "_update.bat")
+        os.startfile(bat_path)
+        pygame.quit()
+        sys.exit()
+
     def run(self):
         running = True
         while running:
@@ -230,6 +320,20 @@ class AimTrainer:
                             self.state = "menu"
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self.state == "menu":
+                        # Check update button
+                        clicked_update = False
+                        if hasattr(self, "update_btn_rect") and self.update_btn_rect.collidepoint(event.pos):
+                            clicked_update = True
+                            if self.update_status == "":
+                                self.update_status = "checking"
+                                self.update_message = "Checking..."
+                                self.update_thread = threading.Thread(target=self._check_for_updates, daemon=True)
+                                self.update_thread.start()
+                            elif self.update_status == "available":
+                                self.update_thread = threading.Thread(target=self._download_update, daemon=True)
+                                self.update_thread.start()
+                            elif self.update_status == "done":
+                                self._apply_update()
                         # Check if clicking a difficulty button
                         clicked_diff = False
                         if hasattr(self, "diff_rects"):
@@ -239,7 +343,7 @@ class AimTrainer:
                                     self.difficulty = DIFFICULTIES[DIFFICULTY_NAMES[i]]
                                     clicked_diff = True
                                     break
-                        if not clicked_diff:
+                        if not clicked_diff and not clicked_update:
                             self.reset()
                             self.state = "playing"
                             self.start_time = time.time()
@@ -414,6 +518,41 @@ class AimTrainer:
         for i, line in enumerate(instructions):
             txt = self.font_xs.render(line, True, LIGHT_GRAY)
             self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 450 + i * 28))
+
+        # Update button (bottom-right)
+        if self.update_status == "":
+            btn_text = "Check for Updates"
+            btn_color = ACCENT
+        elif self.update_status == "checking":
+            btn_text = "Checking..."
+            btn_color = LIGHT_GRAY
+        elif self.update_status == "up_to_date":
+            btn_text = "You're up to date!"
+            btn_color = GREEN
+        elif self.update_status == "available":
+            btn_text = self.update_message + " - Click to download"
+            btn_color = YELLOW
+        elif self.update_status == "downloading":
+            btn_text = "Downloading update..."
+            btn_color = YELLOW
+        elif self.update_status == "done":
+            btn_text = "Click to restart and apply update"
+            btn_color = GREEN
+        else:  # error
+            btn_text = self.update_message
+            btn_color = RED
+
+        btn_surf = self.font_xs.render(btn_text, True, btn_color)
+        btn_x = WIDTH - btn_surf.get_width() - 20
+        btn_y = HEIGHT - 35
+        self.update_btn_rect = pygame.Rect(btn_x - 8, btn_y - 4, btn_surf.get_width() + 16, btn_surf.get_height() + 8)
+        pygame.draw.rect(self.screen, DARK_GRAY, self.update_btn_rect, border_radius=4)
+        pygame.draw.rect(self.screen, btn_color, self.update_btn_rect, 1, border_radius=4)
+        self.screen.blit(btn_surf, (btn_x, btn_y))
+
+        # Version label (bottom-left)
+        ver_txt = self.font_xs.render(f"v{VERSION}", True, DARK_GRAY)
+        self.screen.blit(ver_txt, (10, HEIGHT - 30))
 
     def _draw_game(self):
         # play area border
