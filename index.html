@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aim Trainer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #14141e; }
+canvas { display: block; cursor: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Colors
+const BG = '#14141e';
+const WHITE = '#ffffff';
+const RED = '#dc3232';
+const GREEN = '#32c850';
+const YELLOW = '#f0c828';
+const ORANGE = '#f08c28';
+const LIGHT_GRAY = '#b4b4be';
+const DARK_GRAY = '#282837';
+const PANEL = '#1e1e2d';
+const ACCENT = '#508cff';
+const TARGET_COLORS = ['#dc3232','#f08c28','#f0c828','#32c850','#28c8dc','#a050f0'];
+
+const HUD_HEIGHT = 60;
+
+const DIFFICULTIES = {
+  easy:       { label:'Easy',       color:GREEN,  minR:30, maxR:55, shrink:18, spawnMin:0.7, spawnMax:1.8, lives:7 },
+  medium:     { label:'Medium',     color:YELLOW, minR:24, maxR:48, shrink:24, spawnMin:0.55,spawnMax:1.5, lives:6 },
+  hard:       { label:'Hard',       color:RED,    minR:10, maxR:28, shrink:45, spawnMin:0.25,spawnMax:0.8, lives:3 },
+  impossible: { label:'Impossible', color:ORANGE, minR:6,  maxR:18, shrink:60, spawnMin:0.15,spawnMax:0.5, lives:1 }
+};
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// State
+let state = 'menu'; // menu | playing | gameover
+let diff = null;
+let targets = [];
+let effects = [];
+let score = 0;
+let shots = 0;
+let hits = 0;
+let combo = 0;
+let bestCombo = 0;
+let lastHitTime = 0;
+let lives = 0;
+let startTime = 0;
+let elapsed = 0;
+let spawnTimer = 0;
+let targetsSpawned = 0;
+let reactionTimes = [];
+let mouseX = W / 2, mouseY = H / 2;
+
+// Menu button rects (computed on draw)
+let menuButtons = [];
+
+// Target class
+class Target {
+  constructor() {
+    this.maxRadius = diff.minR + Math.random() * (diff.maxR - diff.minR);
+    this.radius = this.maxRadius;
+    this.x = this.maxRadius + Math.random() * (W - 2 * this.maxRadius);
+    this.y = HUD_HEIGHT + this.maxRadius + Math.random() * (H - HUD_HEIGHT - 2 * this.maxRadius);
+    this.color = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
+    this.spawnTime = performance.now() / 1000;
+    this.alive = true;
+  }
+  update(dt) {
+    this.radius -= diff.shrink * dt;
+    if (this.radius <= 0) { this.alive = false; }
+  }
+  draw() {
+    const r = this.radius;
+    if (r <= 0) return;
+    // outer ring
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    // inner fill
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r * 0.7, 0, Math.PI * 2);
+    ctx.fillStyle = this.color;
+    ctx.fill();
+    // bullseye
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r * 0.25, 0, Math.PI * 2);
+    ctx.fillStyle = WHITE;
+    ctx.fill();
+  }
+  contains(px, py) {
+    const dx = px - this.x, dy = py - this.y;
+    return dx * dx + dy * dy <= this.radius * this.radius;
+  }
+}
+
+// Hit effect
+class HitEffect {
+  constructor(x, y, text, color) {
+    this.x = x; this.y = y;
+    this.text = text; this.color = color;
+    this.life = 1.0;
+  }
+  update(dt) {
+    this.y -= 60 * dt;
+    this.life -= dt;
+  }
+  draw() {
+    if (this.life <= 0) return;
+    ctx.globalAlpha = Math.max(0, this.life);
+    ctx.font = 'bold 20px monospace';
+    ctx.fillStyle = this.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(this.text, this.x, this.y);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Drawing helpers
+function drawCrosshair(x, y) {
+  const s = 14;
+  ctx.strokeStyle = WHITE;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - s, y); ctx.lineTo(x - 4, y);
+  ctx.moveTo(x + 4, y); ctx.lineTo(x + s, y);
+  ctx.moveTo(x, y - s); ctx.lineTo(x, y - 4);
+  ctx.moveTo(x, y + 4); ctx.lineTo(x, y + s);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x, y, 2, 0, Math.PI * 2);
+  ctx.fillStyle = RED;
+  ctx.fill();
+}
+
+function drawHUD() {
+  // bar background
+  ctx.fillStyle = PANEL;
+  ctx.fillRect(0, 0, W, HUD_HEIGHT);
+  ctx.fillStyle = DARK_GRAY;
+  ctx.fillRect(0, HUD_HEIGHT - 1, W, 2);
+
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'left';
+  const pad = 20;
+  const gap = 180;
+  let x = pad;
+  const y = HUD_HEIGHT / 2 + 6;
+
+  // Score
+  ctx.fillStyle = WHITE;
+  ctx.fillText('Score: ' + score, x, y); x += gap;
+
+  // Accuracy
+  const acc = shots > 0 ? Math.round((hits / shots) * 100) : 0;
+  ctx.fillStyle = LIGHT_GRAY;
+  ctx.fillText('Accuracy: ' + acc + '%', x, y); x += gap;
+
+  // Combo
+  if (combo > 1) {
+    ctx.fillStyle = YELLOW;
+    ctx.fillText('Combo: x' + combo, x, y);
+  }
+  x += gap;
+
+  // Lives
+  ctx.fillStyle = lives <= 2 ? RED : GREEN;
+  ctx.fillText('Lives: ' + lives, x, y); x += gap;
+
+  // Difficulty
+  ctx.fillStyle = diff.color;
+  ctx.fillText(diff.label, x, y); x += gap;
+
+  // Timer
+  ctx.fillStyle = LIGHT_GRAY;
+  ctx.fillText('Time: ' + elapsed.toFixed(1) + 's', x, y);
+}
+
+function drawMenu() {
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, W, H);
+
+  // Title
+  ctx.font = 'bold 48px monospace';
+  ctx.fillStyle = WHITE;
+  ctx.textAlign = 'center';
+  ctx.fillText('Aim Trainer', W / 2, H * 0.22);
+
+  // Subtitle
+  ctx.font = '18px monospace';
+  ctx.fillStyle = LIGHT_GRAY;
+  ctx.fillText('Select difficulty to start', W / 2, H * 0.30);
+
+  // Buttons
+  menuButtons = [];
+  const keys = ['easy','medium','hard','impossible'];
+  const bw = 260, bh = 56, gap = 18;
+  const totalH = keys.length * bh + (keys.length - 1) * gap;
+  let by = (H - totalH) / 2 + 20;
+
+  for (const key of keys) {
+    const d = DIFFICULTIES[key];
+    const bx = W / 2 - bw / 2;
+    const hovered = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+
+    ctx.fillStyle = hovered ? d.color + '33' : DARK_GRAY;
+    ctx.strokeStyle = d.color;
+    ctx.lineWidth = 2;
+    roundRect(bx, by, bw, bh, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = 'bold 22px monospace';
+    ctx.fillStyle = d.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(d.label, W / 2, by + bh / 2 + 7);
+
+    menuButtons.push({ x: bx, y: by, w: bw, h: bh, key });
+    by += bh + gap;
+  }
+
+  // Instructions
+  ctx.font = '14px monospace';
+  ctx.fillStyle = LIGHT_GRAY;
+  ctx.textAlign = 'center';
+  ctx.fillText('Click targets before they disappear  |  ESC = Menu', W / 2, H * 0.88);
+
+  drawCrosshair(mouseX, mouseY);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawGameOver() {
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.font = 'bold 42px monospace';
+  ctx.fillStyle = RED;
+  ctx.textAlign = 'center';
+  ctx.fillText('Game Over', W / 2, H * 0.18);
+
+  const acc = shots > 0 ? (hits / shots * 100).toFixed(1) : '0.0';
+  const avgReact = reactionTimes.length > 0
+    ? (reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length).toFixed(3)
+    : 'N/A';
+
+  const stats = [
+    ['Score', '' + score],
+    ['Accuracy', acc + '%'],
+    ['Avg Reaction', avgReact + 's'],
+    ['Best Combo', 'x' + bestCombo],
+    ['Time Survived', elapsed.toFixed(1) + 's'],
+    ['Targets Spawned', '' + targetsSpawned]
+  ];
+
+  ctx.font = '20px monospace';
+  let sy = H * 0.30;
+  for (const [label, val] of stats) {
+    ctx.fillStyle = LIGHT_GRAY;
+    ctx.textAlign = 'right';
+    ctx.fillText(label + ':', W / 2 - 10, sy);
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = 'left';
+    ctx.fillText(val, W / 2 + 10, sy);
+    sy += 36;
+  }
+
+  // Play again button
+  const bw = 280, bh = 56;
+  const bx = W / 2 - bw / 2, by = sy + 30;
+  const hovered = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+  ctx.fillStyle = hovered ? ACCENT + '33' : DARK_GRAY;
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 2;
+  roundRect(bx, by, bw, bh, 8);
+  ctx.fill(); ctx.stroke();
+
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = ACCENT;
+  ctx.textAlign = 'center';
+  ctx.fillText('Back to Menu', W / 2, by + bh / 2 + 7);
+
+  menuButtons = [{ x: bx, y: by, w: bw, h: bh, key: 'menu' }];
+
+  drawCrosshair(mouseX, mouseY);
+}
+
+function startGame(key) {
+  diff = DIFFICULTIES[key];
+  targets = [];
+  effects = [];
+  score = 0; shots = 0; hits = 0;
+  combo = 0; bestCombo = 0; lastHitTime = 0;
+  lives = diff.lives;
+  startTime = performance.now() / 1000;
+  elapsed = 0;
+  spawnTimer = 0;
+  targetsSpawned = 0;
+  reactionTimes = [];
+  state = 'playing';
+}
+
+function getSpawnInterval() {
+  // gradually decrease from spawnMax to spawnMin over 60s
+  const t = Math.min(elapsed / 60, 1);
+  return diff.spawnMax - t * (diff.spawnMax - diff.spawnMin);
+}
+
+// Input
+canvas.addEventListener('mousemove', e => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+});
+
+canvas.addEventListener('click', e => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+
+  if (state === 'menu') {
+    for (const btn of menuButtons) {
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        startGame(btn.key);
+        return;
+      }
+    }
+  } else if (state === 'playing') {
+    shots++;
+    let hitAny = false;
+    // Check targets in reverse (topmost first)
+    for (let i = targets.length - 1; i >= 0; i--) {
+      const t = targets[i];
+      if (t.alive && t.contains(mouseX, mouseY)) {
+        hitAny = true;
+        t.alive = false;
+        hits++;
+
+        const now = performance.now() / 1000;
+        const reaction = now - t.spawnTime;
+        reactionTimes.push(reaction);
+
+        // Combo
+        if (now - lastHitTime < 1.5) {
+          combo++;
+        } else {
+          combo = 1;
+        }
+        lastHitTime = now;
+        if (combo > bestCombo) bestCombo = combo;
+
+        // Score
+        const sizeBonus = Math.floor((diff.maxR - t.radius) / 4);
+        const clampedReaction = Math.max(reaction, 0.1);
+        const speedBonus = Math.floor(10 / clampedReaction);
+        const comboMult = Math.min(combo, 10);
+        const pts = (10 + sizeBonus + speedBonus) * comboMult;
+        score += pts;
+
+        // Effect color
+        let effectColor = ORANGE;
+        if (reaction < 0.5) effectColor = GREEN;
+        else if (reaction < 1.0) effectColor = YELLOW;
+
+        let text = '+' + pts;
+        if (combo >= 3) text += ' x' + comboMult;
+        effects.push(new HitEffect(mouseX, mouseY - 10, text, effectColor));
+        break;
+      }
+    }
+    if (!hitAny) {
+      combo = 0;
+      effects.push(new HitEffect(mouseX, mouseY - 10, 'Miss!', RED));
+    }
+  } else if (state === 'gameover') {
+    for (const btn of menuButtons) {
+      if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
+        state = 'menu';
+        return;
+      }
+    }
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (state === 'playing' || state === 'gameover') {
+      state = 'menu';
+    }
+  }
+});
+
+// Game loop
+let lastTime = performance.now() / 1000;
+
+function loop() {
+  const now = performance.now() / 1000;
+  const dt = Math.min(now - lastTime, 0.1);
+  lastTime = now;
+
+  if (state === 'menu') {
+    drawMenu();
+  } else if (state === 'playing') {
+    elapsed = now - startTime;
+
+    // Spawn targets
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      targets.push(new Target());
+      targetsSpawned++;
+      spawnTimer = getSpawnInterval();
+    }
+
+    // Update targets
+    for (const t of targets) {
+      if (t.alive) t.update(dt);
+    }
+    // Remove expired targets (shrunk to 0) and deduct lives
+    const alive = [];
+    for (const t of targets) {
+      if (t.alive) {
+        alive.push(t);
+      } else {
+        // target was killed by click (radius still > 0) — no life lost
+        // target expired (radius <= 0) — lose a life
+        if (t.radius <= 0) lives--;
+      }
+    }
+    targets = alive;
+
+    // Update effects
+    for (const e of effects) e.update(dt);
+    effects = effects.filter(e => e.life > 0);
+
+    // Check combo decay
+    if (combo > 0 && now - lastHitTime >= 1.5) {
+      combo = 0;
+    }
+
+    // Game over check
+    if (lives <= 0) {
+      state = 'gameover';
+      requestAnimationFrame(loop);
+      return;
+    }
+
+    // Draw
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+    drawHUD();
+    for (const t of targets) t.draw();
+    for (const e of effects) e.draw();
+    drawCrosshair(mouseX, mouseY);
+
+  } else if (state === 'gameover') {
+    drawGameOver();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
