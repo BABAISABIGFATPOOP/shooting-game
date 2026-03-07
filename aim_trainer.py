@@ -58,13 +58,13 @@ DIFFICULTIES = {
         "desc": "Large targets, slow shrink",
     },
     "Medium": {
-        "min_radius": 18,
-        "max_radius": 42,
-        "shrink_speed": 30,
-        "spawn_start": 1.2,
-        "spawn_min": 0.4,
-        "spawn_speedup": 0.015,
-        "lives": 5,
+        "min_radius": 24,
+        "max_radius": 48,
+        "shrink_speed": 24,
+        "spawn_start": 1.5,
+        "spawn_min": 0.55,
+        "spawn_speedup": 0.012,
+        "lives": 6,
         "color": YELLOW,
         "desc": "Standard targets and speed",
     },
@@ -519,7 +519,7 @@ class AimTrainer:
             txt = self.font_xs.render(line, True, LIGHT_GRAY)
             self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 450 + i * 28))
 
-        # Update button (bottom-right)
+        # Update button (centered, below instructions)
         if self.update_status == "":
             btn_text = "Check for Updates"
             btn_color = ACCENT
@@ -542,13 +542,15 @@ class AimTrainer:
             btn_text = self.update_message
             btn_color = RED
 
-        btn_surf = self.font_xs.render(btn_text, True, btn_color)
-        btn_x = WIDTH - btn_surf.get_width() - 20
-        btn_y = HEIGHT - 35
-        self.update_btn_rect = pygame.Rect(btn_x - 8, btn_y - 4, btn_surf.get_width() + 16, btn_surf.get_height() + 8)
-        pygame.draw.rect(self.screen, DARK_GRAY, self.update_btn_rect, border_radius=4)
-        pygame.draw.rect(self.screen, btn_color, self.update_btn_rect, 1, border_radius=4)
-        self.screen.blit(btn_surf, (btn_x, btn_y))
+        btn_surf = self.font_sm.render(btn_text, True, btn_color)
+        btn_w = btn_surf.get_width() + 40
+        btn_h = 42
+        btn_x = WIDTH // 2 - btn_w // 2
+        btn_y = 600
+        self.update_btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+        pygame.draw.rect(self.screen, DARK_GRAY, self.update_btn_rect, border_radius=8)
+        pygame.draw.rect(self.screen, btn_color, self.update_btn_rect, 2, border_radius=8)
+        self.screen.blit(btn_surf, (WIDTH // 2 - btn_surf.get_width() // 2, btn_y + btn_h // 2 - btn_surf.get_height() // 2))
 
         # Version label (bottom-left)
         ver_txt = self.font_xs.render(f"v{VERSION}", True, DARK_GRAY)
