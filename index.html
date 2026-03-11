@@ -201,10 +201,15 @@ function drawMenu() {
   ctx.textAlign = 'center';
   ctx.fillText('Aim Trainer', W / 2, H * 0.22);
 
+  // Important message
+  ctx.font = 'bold 24px monospace';
+  ctx.fillStyle = '#8B4513';
+  ctx.fillText('NUT is a big fat poopyhead', W / 2, H * 0.28);
+
   // Subtitle
   ctx.font = '18px monospace';
   ctx.fillStyle = LIGHT_GRAY;
-  ctx.fillText('Select difficulty to start', W / 2, H * 0.30);
+  ctx.fillText('Select difficulty to start', W / 2, H * 0.33);
 
   // Buttons
   menuButtons = [];
