@@ -1,0 +1,38 @@
+{
+  "name": "shooting-game",
+  "version": "1.0.0",
+  "description": "Aim Trainer - Desktop Edition",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win --x64"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.dylan.aimtrainer",
+    "productName": "AimTrainer",
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "target.ico"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "target.ico"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "BABAISABIGFATPOOP",
+        "repo": "shooting-game"
+      }
+    ]
+  }
+}
