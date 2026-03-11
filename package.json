@@ -25,7 +25,12 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "target.ico"
+      "icon": "target.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
     },
     "publish": [
       {
